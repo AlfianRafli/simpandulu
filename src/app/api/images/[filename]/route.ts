@@ -9,7 +9,9 @@ export async function GET(
 ) {
   // 2. Wajib gunakan await untuk membuka isi params di Next.js versi terbaru
   const resolvedParams = await params;
-  const filename = resolvedParams.filename;
+  const rawFilename = resolvedParams.filename;
+  const filename = rawFilename.replace(/[^a-zA-Z0-9.-]/g, ''); 
+
   
   const filePath = join(process.cwd(), 'public/uploads', filename);
 

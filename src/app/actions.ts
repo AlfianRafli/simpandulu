@@ -6,9 +6,10 @@ import { eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { cookies } from 'next/headers';
 import { SignJWT } from 'jose';
-import { writeFile } from 'fs/promises';
+import { writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { redirect } from 'next/navigation';
+import { randomUUID } from 'crypto';
 
 export async function loginAdmin(formData: FormData) {
   const password = formData.get('password');
@@ -55,19 +56,41 @@ export async function updateProduct(id: number, formData: FormData) {
 
   let imageUrl;
   if (file && file.size > 0) {
+    // 1. Ambil data produk lama untuk mengetahui nama file gambar lamanya
+    const oldProduct = await db.select().from(products).where(eq(products.id, id));
+    
+    // 2. Hapus gambar lama dari SSD VPS
+    if (oldProduct.length > 0 && oldProduct[0].imageUrl) {
+      const oldFilename = oldProduct[0].imageUrl.split('/').pop();
+      if (oldFilename) {
+        try { await unlink(join(process.cwd(), 'public/uploads', oldFilename)); } catch (e) { /* Abaikan jika file tidak ditemukan */ }
+      }
+    }
+
+    // 3. Simpan gambar baru
     const uniqueName = `${Date.now()}-${file.name.replace(/\s+/g, '-')}`;
     await writeFile(join(process.cwd(), 'public/uploads', uniqueName), Buffer.from(await file.arrayBuffer()));
     imageUrl = `/api/images/${uniqueName}`;
   }
 
   await db.update(products).set({ title, productNo, affiliateUrl, categoryId, ...(imageUrl && { imageUrl }) }).where(eq(products.id, id));
-  
-  // CATAT KE AUDIT LOG
   await db.insert(auditLogs).values({ action: 'UPDATE', details: `Memperbarui data produk: #${productNo}` });
   revalidatePath('/'); revalidatePath('/admin/update'); revalidatePath('/admin/audit');
 }
 
 export async function deleteProduct(id: number) {
+  // 1. Ambil data produk sebelum dihapus
+  const targetProduct = await db.select().from(products).where(eq(products.id, id));
+  
+  // 2. Hapus gambar dari SSD VPS
+  if (targetProduct.length > 0 && targetProduct[0].imageUrl) {
+    const filename = targetProduct[0].imageUrl.split('/').pop();
+    if (filename) {
+      try { await unlink(join(process.cwd(), 'public/uploads', filename)); } catch (e) { /* Abaikan */ }
+    }
+  }
+
+  // 3. Hapus data dari database
   await db.delete(products).where(eq(products.id, id));
   await db.insert(auditLogs).values({ action: 'HAPUS', details: `Menghapus produk ID: ${id}` });
   revalidatePath('/'); revalidatePath('/admin/delete'); revalidatePath('/admin/update'); revalidatePath('/admin/audit');
